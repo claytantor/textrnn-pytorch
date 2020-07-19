@@ -1,7 +1,7 @@
-from flask import Flask
+from flask import Flask, request
 from flask import jsonify
 
-import sys, os
+import sys, os, traceback
 import os.path
 from os import path
 import torch 
@@ -10,12 +10,15 @@ import torch.nn.functional as F
 import argparse
 import glob
 import random
+import re
+import time
 
 import numpy as np
 from collections import Counter
 import os
 import tensorflow as tf
 from argparse import Namespace
+
 
 from songdb import search_song_titles
 
@@ -213,8 +216,9 @@ def make_dir(dir_name):
 def capitalize_all_words(all_words):
     capitalized = []
     words = all_words.split(' ')
+    regex = re.compile('[^a-zA-Z]')
     for word in words:
-        capitalized.append(word.capitalize())
+        capitalized.append(regex.sub('', word).capitalize())
     return ' '.join(capitalized)
 
 def get_seed_file(seed_file_path):
@@ -223,68 +227,121 @@ def get_seed_file(seed_file_path):
         data = file.read(40856).replace('\n', '')
     return data.split(" ")
 
+
+def get_title_with_retry(device, flags):
+
+    try:
+            
+        int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = get_data_from_file(
+            flags.train_file, flags.batch_size, flags.seq_size)
+
+        net = RNNModule(n_vocab, flags.seq_size,
+                            flags.embedding_size, flags.lstm_size)
+
+
+        list_of_files = glob.glob('{}/*'.format(flags.checkpoint_path)) # * means all if need specific format then *.csv
+        latest_file = max(list_of_files, key=os.path.getctime)
+
+        # print(latest_file)
+
+        net.load_state_dict(torch.load(latest_file))
+        net.eval()
+        net = net.to(device)
+
+        words = predict(device, net, flags.initial_words, n_vocab,
+            vocab_to_int, int_to_vocab, top_k=5)
+
+        doc = nlp(' '.join(words))
+
+        # Analyze syntax
+        nouns =  [chunk.text for chunk in doc.noun_chunks]
+        verbs = [token.lemma_ for token in doc if token.pos_ == "VERB"]
+        adps = [token.lemma_ for token in doc if token.pos_ == "ADP"]
+        propn = [token.lemma_ for token in doc if token.pos_ == "PROPN"]
+
+        # NOUN NOUN VERB  
+        return {'title':capitalize_all_words('{} {} {}'.format(
+            nouns[random.randint(0, len(nouns)-1)],           
+            nouns[random.randint(0, len(nouns)-1)],
+            verbs[random.randint(0, len(verbs)-1)]
+            ))}, 200
+    except:
+        # print("Exception in user code:")
+        # print("-"*60)
+        # traceback.print_exc(file=sys.stdout)
+        # print("-"*60)
+
+        status_code = 500
+        success = False
+        response = {
+            'success': success,
+            'error': {
+                'type': 'UnexpectedException',
+                'message': 'An unexpected error has occurred.'
+            }
+        }
+
+        return response, status_code
+
 @app.route('/title')
 def get_song_title():
 
-    session_id = os.environ.get("SESSION", default="song_titles_01")
+    session_id = request.args.get("session_id")
+    if session_id is None:
+        session_id = os.environ.get("SESSION", default="song_titles_01")
     
     session_dir = os.path.join(os.getcwd(), "training/{}".format(session_id))
     checkpoint_path = "{}/checkpoint_pt".format(session_dir)
 
     word_seed = get_seed_file('training/{}/source/song_titles.txt'.format(session_id))
-    position = random.randint(0, len(word_seed)-10)
+    # word_seed = ['wagon', 'again', 'my', 'rangers', 'are', 'shakin']
+    # position = random.randint(1, len(word_seed)-2)
+    regex = re.compile('[^a-zA-Z]')
+
+    # initial_words = list(map(lambda x : regex.sub(' ', x).strip().split(' ')[0], word_seed[position:position+3]))     
+    # print(initial_words)
 
     source_dir = "{}/source".format(session_dir)
     songs_title_source_file = "{}/song_titles.txt".format(source_dir)
 
-
-    flags = Namespace(  
-        train_file=songs_title_source_file,
-        seq_size=32,
-        batch_size=16,
-        embedding_size=64,
-        lstm_size=64,
-        gradients_norm=5,
-        initial_words=word_seed[position:position+4],
-        predict_top_k=5,
-        checkpoint_path=checkpoint_path,
-    )
-
-
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print_info(device)
-    
-    int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = get_data_from_file(
-        flags.train_file, flags.batch_size, flags.seq_size)
 
-    net = RNNModule(n_vocab, flags.seq_size,
-                        flags.embedding_size, flags.lstm_size)
+    title_found = False
+    response = None
+
+    while not title_found:
+        position = random.randint(1, len(word_seed)-2)
+        initial_words = list(map(lambda x : regex.sub(' ', x).strip().split(' ')[0], word_seed[position:position+3]))     
+        print(initial_words)
+        flags = Namespace(  
+            train_file=songs_title_source_file,
+            seq_size=32,
+            batch_size=16,
+            embedding_size=64,
+            lstm_size=64,
+            gradients_norm=5,
+            initial_words=initial_words,
+            predict_top_k=5,
+            checkpoint_path=checkpoint_path,
+        )
+
+        response, status_code = get_title_with_retry(device,flags)
+        if status_code == 200:
+            title_found = True
+        print("try again.")
+        time.sleep(1)
+
+    if response is not None:
+        return jsonify(response), status_code
+    else:
+        return jsonify({'message':"Unknown error"}), 500
+        
 
 
-    list_of_files = glob.glob('{}/*'.format(checkpoint_path)) # * means all if need specific format then *.csv
-    latest_file = max(list_of_files, key=os.path.getctime)
 
-    net.load_state_dict(torch.load(latest_file))
-    net.eval()
-    net = net.to(device)
 
-    words = predict(device, net, flags.initial_words, n_vocab,
-        vocab_to_int, int_to_vocab, top_k=5)
-
-    doc = nlp(' '.join(words))
-
-    # Analyze syntax
-    nouns =  [chunk.text for chunk in doc.noun_chunks]
-    verbs = [token.lemma_ for token in doc if token.pos_ == "VERB"]
-    adps = [token.lemma_ for token in doc if token.pos_ == "ADP"]
-    propn = [token.lemma_ for token in doc if token.pos_ == "PROPN"]
-
-    # NOUN NOUN VERB
-    return jsonify({'title':capitalize_all_words('{} {} {}'.format(
-        nouns[random.randint(0, len(nouns)-1)],           
-        nouns[random.randint(0, len(nouns)-1)],
-        verbs[random.randint(0, len(verbs)-1)]
-        ))})
 
 
 @app.route('/')

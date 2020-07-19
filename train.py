@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import argparse
 import glob
 import random
+import shutil
 
 import numpy as np
 from collections import Counter
@@ -90,6 +91,7 @@ def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=5):
     state_h, state_c = net.zero_state(1)
     state_h = state_h.to(device)
     state_c = state_c.to(device)
+    #print(words)
     for w in words:
         ix = torch.tensor([[vocab_to_int[w]]]).to(device)
         output, (state_h, state_c) = net(ix, (state_h, state_c))
@@ -161,7 +163,7 @@ def train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_
                 print('Epoch: {}/{}'.format(e, iteration_count),
                       'Iteration: {}'.format(iteration),
                       'Loss: {}'.format(loss_value))
-
+            
             if iteration % 1000 == 0:
                 ''.join(predict(device, net, flags.initial_words, n_vocab,
                         vocab_to_int, int_to_vocab, top_k=5))
@@ -215,15 +217,24 @@ def main(argv):
     parser.add_argument("-i", "--initial", action="store", default="I am",
         required=False, dest="initial", help="Initial words to seed") 
 
+
     parser.add_argument("-s", "--session", action="store",
         required=True,  dest="session", help="the sessionid for the training")    
 
     parser.add_argument("-n", "--number", action="store", default=200,
-        required=False,  dest="number", help="the mumber of iterations")                                        
+        required=False,  dest="number", help="the number of iterations")                                        
         
+    parser.add_argument("-f", "--file", action="store",
+        required=False, dest="file", help="Source file") 
+
+    parser.add_argument("-w", "--words", action="store", default="5",
+        required=False, dest="words", help="Number of words")     
+
     args = parser.parse_args()
 
     if 'train' in args.mode:
+        
+
         session_dir = os.path.join(os.getcwd(), "training/{}".format(args.session))
         make_dir(session_dir)
 
@@ -232,11 +243,13 @@ def main(argv):
 
         source_dir = "{}/source".format(session_dir)
         make_dir(source_dir)
+        # copy to song titles 
+        if path.exists(args.file):
+            songs_title_source_file = "{}/song_titles.txt".format(source_dir)
+            shutil.copyfile(args.file, songs_title_source_file)
+        else:
+            raise ValueError('cannot find input file: {}'.format(args.file))
 
-        songs_title_source_file = "{}/song_titles.txt".format(source_dir)
-        # if the song file doesnt exist
-        if not path.exists(songs_title_source_file):
-            query_songs_and_write(songs_title_source_file)
 
         flags = Namespace(  
                 train_file=songs_title_source_file,
@@ -268,17 +281,13 @@ def main(argv):
         train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_to_int, int_to_vocab, flags, checkpoint_path, iteration_count=int(args.number))
 
     elif 'predict' in args.mode:
+
         
         session_dir = os.path.join(os.getcwd(), "training/{}".format(args.session))
         checkpoint_path = "{}/checkpoint_pt".format(session_dir)
-
-
-
-
         source_dir = "{}/source".format(session_dir)
         songs_title_source_file = "{}/song_titles.txt".format(source_dir)
-        
-        
+     
         flags = Namespace(  
                 train_file=songs_title_source_file,
                 seq_size=32,
@@ -286,8 +295,8 @@ def main(argv):
                 embedding_size=64,
                 lstm_size=64,
                 gradients_norm=5,
-                initial_words=['I', 'am'],
-                predict_top_k=5,
+                initial_words=args.initial.split(' '),
+                predict_top_k=int(args.words),
                 checkpoint_path=checkpoint_path,
             )
 
@@ -307,24 +316,25 @@ def main(argv):
         net.load_state_dict(torch.load(latest_file))
         net.eval()
         net = net.to(device)
-        words = predict(device, net, args.initial.split(" "), n_vocab,
+        words = predict(device, net, flags.initial_words, n_vocab,
             vocab_to_int, int_to_vocab, top_k=5)
 
-        doc = nlp(' '.join(words))
+        # doc = nlp(' '.join(words))
+        print(' '.join(words))
 
-        #print (words[10:13])
-        # Analyze syntax
-        nouns =  [chunk.text for chunk in doc.noun_chunks]
-        verbs = [token.lemma_ for token in doc if token.pos_ == "VERB"]
-        adps = [token.lemma_ for token in doc if token.pos_ == "ADP"]
-        propn = [token.lemma_ for token in doc if token.pos_ == "PROPN"]
+        # #print (words[10:13])
+        # # Analyze syntax
+        # nouns =  [chunk.text for chunk in doc.noun_chunks]
+        # verbs = [token.lemma_ for token in doc if token.pos_ == "VERB"]
+        # adps = [token.lemma_ for token in doc if token.pos_ == "ADP"]
+        # propn = [token.lemma_ for token in doc if token.pos_ == "PROPN"]
 
-        # NOUN NOUN VERB
-        print (capitalize_all_words('{} {} {}'.format(
-            nouns[random.randint(0, len(nouns)-1)],           
-            nouns[random.randint(0, len(nouns)-1)],
-            verbs[random.randint(0, len(verbs)-1)]
-            )))
+        # # NOUN NOUN VERB
+        # print (capitalize_all_words('{} {} {}'.format(
+        #     nouns[random.randint(0, len(nouns)-1)],           
+        #     nouns[random.randint(0, len(nouns)-1)],
+        #     verbs[random.randint(0, len(verbs)-1)]
+        #     )))
 
 
 
