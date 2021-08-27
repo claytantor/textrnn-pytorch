@@ -12,15 +12,14 @@ import glob
 import random
 import re
 import time
-
+import random
 import numpy as np
 from collections import Counter
 import os
-import tensorflow as tf
 from argparse import Namespace
+from predict import predict_text
 
-
-from songdb import search_song_titles
+# from songdb import search_song_titles
 
 import spacy
 
@@ -195,16 +194,16 @@ def print_info(device):
     print ('Available devices ', torch.cuda.device_count())
     print ('Current cuda device ', torch.cuda.current_device())
 
-def query_songs_and_write(songs_file_path):
+# def query_songs_and_write(songs_file_path):
 
-    song_titles = search_song_titles()
+#     song_titles = search_song_titles()
 
-    outF = open(songs_file_path, "w")
-    for line in song_titles:
-        # write line to output file
-        outF.write(line+" ")
+#     outF = open(songs_file_path, "w")
+#     for line in song_titles:
+#         # write line to output file
+#         outF.write(line+" ")
     
-    outF.close()
+#     outF.close()
 
 def make_dir(dir_name):
     try:
@@ -339,9 +338,21 @@ def get_song_title():
         return jsonify({'message':"Unknown error"}), 500
         
 
+@app.route('/gentext')
+def gentext():
 
+    initial_words = random.choice(app.config["INITIAL_WORDS"].split(','))
+    sentences = predict_text(app.config["PYTORCH_DEVICE"], 
+        app.config["TRAINING_DIR"], 
+        app.config["TRAIN_SESSION"], 
+        app.config["PREDICT_LENGTH"], 
+        initial_words)
+    # return '. '.join(sentences)
 
-
+    if sentences is not None:
+        return jsonify({'sentences':sentences}), 200
+    else:
+        return jsonify({'message':"Unknown error"}), 500
 
 
 @app.route('/')
@@ -351,4 +362,4 @@ def hello():
 
 
 if __name__ == '__main__':
-    app.run()
+    app.run(port=8002)

@@ -12,10 +12,9 @@ import shutil
 import numpy as np
 from collections import Counter
 import os
-import tensorflow as tf
 from argparse import Namespace
 
-from songdb import search_song_titles
+# from songdb import search_song_titles
 
 import spacy
 
@@ -77,41 +76,15 @@ def get_batches(in_text, out_text, batch_size, seq_size):
         yield in_text[:, i:i+seq_size], out_text[:, i:i+seq_size]
 
 
-
 def get_loss_and_train_op(net, lr=0.001):
     criterion = nn.CrossEntropyLoss()
+    
+    #criterion = nn.NLLLoss()
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    #optimizer = torch.optim.RMSprop(net.parameters(), lr=lr, alpha=0.99, eps=1e-08, weight_decay=0, momentum=0, centered=False)
 
     return criterion, optimizer
 
-
-def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=5):
-    net.eval()
-
-    state_h, state_c = net.zero_state(1)
-    state_h = state_h.to(device)
-    state_c = state_c.to(device)
-    #print(words)
-    for w in words:
-        ix = torch.tensor([[vocab_to_int[w]]]).to(device)
-        output, (state_h, state_c) = net(ix, (state_h, state_c))
-    
-    _, top_ix = torch.topk(output[0], k=top_k)
-    choices = top_ix.tolist()
-    choice = np.random.choice(choices[0])
-
-    words.append(int_to_vocab[choice])
-
-    for _ in range(100):
-        ix = torch.tensor([[choice]]).to(device)
-        output, (state_h, state_c) = net(ix, (state_h, state_c))
-
-        _, top_ix = torch.topk(output[0], k=top_k)
-        choices = top_ix.tolist()
-        choice = np.random.choice(choices[0])
-        words.append(int_to_vocab[choice])
-
-    return words
 
 
 def train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_to_int,  int_to_vocab, flags, target_dir, iteration_count=200):
@@ -140,19 +113,13 @@ def train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_
 
             logits, (state_h, state_c) = net(x, (state_h, state_c))
             loss = criterion(logits.transpose(1, 2), y)
+     
+            loss_value = loss.item()
+
+            loss.backward()
 
             state_h = state_h.detach()
             state_c = state_c.detach()
-
-            loss_value = loss.item()
-
-            # Perform back-propagation
-            loss.backward(retain_graph=True)
-
-            # Update the network's parameters
-            optimizer.step()
-
-            loss.backward()
 
             _ = torch.nn.utils.clip_grad_norm_(
                 net.parameters(), flags.gradients_norm)
@@ -165,8 +132,6 @@ def train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_
                       'Loss: {}'.format(loss_value))
             
             if iteration % 1000 == 0:
-                ''.join(predict(device, net, flags.initial_words, n_vocab,
-                        vocab_to_int, int_to_vocab, top_k=5))
                 torch.save(net.state_dict(),
                            '{}/model-{}.pth'.format(target_dir, iteration))
 
@@ -182,16 +147,6 @@ def print_info(device):
     print ('Available devices ', torch.cuda.device_count())
     print ('Current cuda device ', torch.cuda.current_device())
 
-def query_songs_and_write(songs_file_path):
-
-    song_titles = search_song_titles()
-
-    outF = open(songs_file_path, "w")
-    for line in song_titles:
-        # write line to output file
-        outF.write(line+" ")
-    
-    outF.close()
 
 def make_dir(dir_name):
     try:
@@ -211,12 +166,8 @@ def main(argv):
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-m", "--mode", action="store",
-        required=True, dest="mode", help="train or predict")
-
     parser.add_argument("-i", "--initial", action="store", default="I am",
         required=False, dest="initial", help="Initial words to seed") 
-
 
     parser.add_argument("-s", "--session", action="store",
         required=True,  dest="session", help="the sessionid for the training")    
@@ -228,113 +179,67 @@ def main(argv):
         required=False, dest="file", help="Source file") 
 
     parser.add_argument("-w", "--words", action="store", default="5",
-        required=False, dest="words", help="Number of words")     
+        required=False, dest="words", help="Number of words")   
+    
+    parser.add_argument("-o", "--out", action="store",
+        required=False, dest="outfile", help="save predictions to file name")   
+
+    parser.add_argument("-d", "--device", action="store",
+        required=False, dest="device", default="cuda", help="use the targeted cuda device")   
+
+    parser.add_argument("-l", "--lr", action="store",
+        required=False, dest="learning_rate", default="0.001", help="learning rate to use")    
 
     args = parser.parse_args()
 
-    if 'train' in args.mode:
-        
+    print(args.device)
 
-        session_dir = os.path.join(os.getcwd(), "training/{}".format(args.session))
-        make_dir(session_dir)
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    print_info(device)
+    
+    session_dir = os.path.join(os.getcwd(), "/workspace/training/{}".format(args.session))
+    make_dir(session_dir)
 
-        checkpoint_path = "{}/checkpoint_pt".format(session_dir)
-        make_dir(checkpoint_path)
+    checkpoint_path = "{}/checkpoint_pt".format(session_dir)
+    make_dir(checkpoint_path)
 
-        source_dir = "{}/source".format(session_dir)
-        make_dir(source_dir)
-        # copy to song titles 
-        if path.exists(args.file):
-            songs_title_source_file = "{}/song_titles.txt".format(source_dir)
-            shutil.copyfile(args.file, songs_title_source_file)
-        else:
-            raise ValueError('cannot find input file: {}'.format(args.file))
-
-
-        flags = Namespace(  
-                train_file=songs_title_source_file,
-                seq_size=32,
-                batch_size=16,
-                embedding_size=64,
-                lstm_size=64,
-                gradients_norm=5,
-                initial_words=['I', 'am'],
-                predict_top_k=5,
-                checkpoint_path=checkpoint_path,
-            )
-
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print_info(device)
-        
-        int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = get_data_from_file(
-            flags.train_file, flags.batch_size, flags.seq_size)
-
-        net = RNNModule(n_vocab, flags.seq_size,
-                        flags.embedding_size, flags.lstm_size)
-
-                        
-        net = net.to(device)
-
-        criterion, optimizer = get_loss_and_train_op(net, 0.01)
+    source_dir = "{}/source".format(session_dir)
+    make_dir(source_dir)
+    # copy to song titles 
+    if path.exists(args.file):
+        songs_title_source_file = "{}/source_lines.txt".format(source_dir)
+        shutil.copyfile(args.file, songs_title_source_file)
+    else:
+        raise ValueError('cannot find input file: {}'.format(args.file))
 
 
-        train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_to_int, int_to_vocab, flags, checkpoint_path, iteration_count=int(args.number))
+    flags = Namespace(  
+            train_file=songs_title_source_file,
+            seq_size=32,
+            batch_size=16,
+            embedding_size=64,
+            lstm_size=64,
+            gradients_norm=5,
+            initial_words=['I', 'am'],
+            predict_top_k=5,
+            checkpoint_path=checkpoint_path,
+        )
 
-    elif 'predict' in args.mode:
+    
+    int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = get_data_from_file(
+        flags.train_file, flags.batch_size, flags.seq_size)
 
-        
-        session_dir = os.path.join(os.getcwd(), "training/{}".format(args.session))
-        checkpoint_path = "{}/checkpoint_pt".format(session_dir)
-        source_dir = "{}/source".format(session_dir)
-        songs_title_source_file = "{}/song_titles.txt".format(source_dir)
-     
-        flags = Namespace(  
-                train_file=songs_title_source_file,
-                seq_size=32,
-                batch_size=16,
-                embedding_size=64,
-                lstm_size=64,
-                gradients_norm=5,
-                initial_words=args.initial.split(' '),
-                predict_top_k=int(args.words),
-                checkpoint_path=checkpoint_path,
-            )
+    net = RNNModule(n_vocab, flags.seq_size,
+                    flags.embedding_size, flags.lstm_size)
 
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print_info(device)
-        
-        int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = get_data_from_file(
-            flags.train_file, flags.batch_size, flags.seq_size)
+                    
+    net = net.to(device)
 
-        net = RNNModule(n_vocab, flags.seq_size,
-                         flags.embedding_size, flags.lstm_size)
+    criterion, optimizer = get_loss_and_train_op(net, float(args.learning_rate))
+
+    train(device, net, criterion, optimizer,  in_text, out_text, n_vocab, vocab_to_int, int_to_vocab, flags, checkpoint_path, iteration_count=int(args.number))
 
 
-        list_of_files = glob.glob('{}/*'.format(checkpoint_path)) # * means all if need specific format then *.csv
-        latest_file = max(list_of_files, key=os.path.getctime)
-
-        net.load_state_dict(torch.load(latest_file))
-        net.eval()
-        net = net.to(device)
-        words = predict(device, net, flags.initial_words, n_vocab,
-            vocab_to_int, int_to_vocab, top_k=5)
-
-        # doc = nlp(' '.join(words))
-        print(' '.join(words))
-
-        # #print (words[10:13])
-        # # Analyze syntax
-        # nouns =  [chunk.text for chunk in doc.noun_chunks]
-        # verbs = [token.lemma_ for token in doc if token.pos_ == "VERB"]
-        # adps = [token.lemma_ for token in doc if token.pos_ == "ADP"]
-        # propn = [token.lemma_ for token in doc if token.pos_ == "PROPN"]
-
-        # # NOUN NOUN VERB
-        # print (capitalize_all_words('{} {} {}'.format(
-        #     nouns[random.randint(0, len(nouns)-1)],           
-        #     nouns[random.randint(0, len(nouns)-1)],
-        #     verbs[random.randint(0, len(verbs)-1)]
-        #     )))
 
 
 

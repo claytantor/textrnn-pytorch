@@ -35,3 +35,61 @@ FLASK_APP=app.py APP_CONFIG=textrnn.cfg flask run --host=0.0.0.0 --port=5001
 curl http://localhost:5001/title?session_id=metal04
 
 {"title":"Glimpse No Wind Swear"}
+
+
+## training using the NVIDIA docker container
+docker run --gpus all --shm-size=1g --ulimit memlock=-1 \
+    --ulimit stack=67108864 -it --rm \
+    -v $(pwd)/workspace:/workspace nvcr.io/nvidia/pytorch:20.06-py3 \
+    python train.py --mode train \
+    --file /workspace/training/hplc/metal_gothic_poetry.txt \
+    --session metal03 --number 4000 
+
+## building the docker container
+`docker build . -t textrnn:latest`
+
+### train
+```docker run --gpus all --shm-size=1g --ulimit memlock=-1     --ulimit stack=67108864 -it --rm     -v $(pwd)/workspace:/workspace textrnn:latest python src/train.py --mode train  --file /workspace/training/hplc/metal_gothic_poetry.txt  --session metal05 --number 1000 ```
+
+docker run --gpus all --shm-size=1g --ulimit memlock=-1     --ulimit stack=67108864 -it --rm     -v $(pwd)/workspace:/workspace textrnn:latest python src/train.py --mode train  --file /workspace/training/hplc/metal_gothic_poetry.txt  --session reflect_01 --number 40000
+
+
+### predict
+```docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 -it --rm  -v $(pwd)/workspace:/workspace textrnn:latest python src/train.py --mode predict --session metal05```
+
+and
+
+```docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 -it --rm  -v $(pwd)/workspace:/workspace textrnn:latest python src/predict.py --session metal05 --predict 500 --lines 10```
+
+and 
+
+```
+docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 -it --rm  -v $(pwd)/workspace:/workspace textrnn:latest python src/predict.py --session metal05 --predict 500 --lines 10
+```
+
+docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 -it --rm  -v $(pwd)/workspace:/workspace textrnn:latest python src/predict.py --session metal05 --predic 500 --lines 10 --initial "disquieting earth" -o /workspace/reflect/mar_3_2021
+
+
+docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 -it --rm  -v $(pwd)/workspace:/workspace textrnn:latest python src/generate.py --session metal05 --predic 800 --lines 20 --initial "disquieting earth"
+
+python src/generate.py --session reflect_02 --predic 800 --initial "disquieting earth"
+
+
+python src/predict.py --session reflect_02 --predic 500 --lines 10 --initial "disquieting earth"
+
+
+# run the flask app
+
+## cli
+python -m flask run --host=0.0.0.0 --port=8002
+
+## as a docker instance
+```
+docker run -p 8002:8002 --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 -it --rm  -v $(pwd)/workspace:/workspace textrnn:latest
+```
+
+
+
+
+
+
